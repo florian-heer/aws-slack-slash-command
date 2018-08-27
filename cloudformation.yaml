@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "<Description>"
+Parameters:
+  SlackVerificationToken:
+    Type: String
+  SlackTeamId:
+    Type: String
+  StackRoot:
+    Type: String
+  Module:
+    Type: String
+  Account:
+    Type: String
+  Region:
+    Type: String
+  ProjectName:
+    Type: String
+  StageName:
+    Type: String
+    Default: "prod"
+  CommandName:
+    Type: String
+
+Resources:
+  NotifyWorkspaceLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub "${StackRoot}-lambda-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:*"
+                Resource: "arn:aws:logs:*:*:*"
+      Policies:
+        - PolicyName: !Sub "${StackRoot}-iot-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "iot:Publish"
+                Resource: "arn:aws:iot:*:*:topic/*"
+      RoleName: !Sub "${StackRoot}-lambda-role"
+
+  NotifyWorkspaceLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: !Sub "${StackRoot}"
+        S3Key: !Sub "source_code/${Module}.zip"
+      Description: ""
+      Environment:
+        Variables:
+          SLACK_VERIFICATION_TOKEN: !Sub "${SlackVerificationToken}"
+          SLACK_TEAM_ID: !Sub "${SlackTeamId}"
+      Runtime: "nodejs8.10"
+      FunctionName: !Sub "${StackRoot}"
+      Handler: "index.handler"
+      Role: !GetAtt NotifyWorkspaceLambdaRole.Arn
+  
+  NotifyWorkspaceApiRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "apigateway.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub "${StackRoot}-api-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:*"
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+      RoleName: !Sub "${StackRoot}-api-role"
+
+  NotifyWorkspacePermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:invokeFunction"
+      FunctionName: !GetAtt NotifyWorkspaceLambda.Arn
+      Principal: "apigateway.amazonaws.com"
+      SourceArn:
+        Fn::Join: ["", ["arn:aws:execute-api:", "Fn::Sub": "${Region}", ":", "Fn::Sub": "${Account}", ":", "Ref": "NotifyWorkspaceApi", "/*"]]
+
+  NotifyWorkspaceApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "slack-notifyworkspace"
+
+  NotifyWorkspaceAccount:
+    Type: "AWS::ApiGateway::Account"
+    Properties:
+      CloudWatchRoleArn: !GetAtt NotifyWorkspaceApiRole.Arn
+
+  NotifyWorkspaceResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref NotifyWorkspaceApi
+      ParentId: !GetAtt NotifyWorkspaceApi.RootResourceId
+      PathPart: !Sub "{CommandName}"
+
+  NotifyWorkspaceDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn: 
+      - "NotifyWorkspacePostMethod"
+      - "NotifyWorkspaceOptionMethod"
+    Properties:
+      RestApiId: !Ref NotifyWorkspaceApi
+      StageName: !Sub "${StageName}"
+
+  NotifyWorkspacePostMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: "POST"
+      Integration:
+        Type: "AWS"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        Uri:
+          Fn::Join: ["", ["arn:aws:apigateway:", "Fn::Sub": "${Region}", ":lambda:path/2015-03-31/functions/", "Fn::GetAtt": ["NotifyWorkspaceLambda", "Arn"], "/invocations"]]
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: ''
+        IntegrationHttpMethod: "POST"
+        RequestTemplates:
+          application/x-www-form-urlencoded: |
+            ## convert HTML POST data or HTTP GET query string to JSON
+ 
+            ## get the raw post data from the AWS built-in variable and give it a nicer name
+            #if ($context.httpMethod == "POST")
+             #set($rawAPIData = $input.path("$"))
+            #elseif ($context.httpMethod == "GET")
+             #set($rawAPIData = $input.params().querystring)
+             #set($rawAPIData = $rawAPIData.toString())
+             #set($rawAPIDataLength = $rawAPIData.length() - 1)
+             #set($rawAPIData = $rawAPIData.substring(1, $rawAPIDataLength))
+             #set($rawAPIData = $rawAPIData.replace(", ", "&"))
+          
+            #else
+             #set($rawAPIData = "")
+            #end
+            
+            ## Work around for Slack's stupidity:
+            #set($rawAPIData = $rawAPIData.replace("%26amp%3B", "%26"))
+            #set($rawAPIData = $rawAPIData.replace("%26gt%3B", "%3C"))
+            #set($rawAPIData = $rawAPIData.replace("%26lt%3B", "%3E"))
+            
+            ## first we get the number of "&" in the string, this tells us if there is more than one key value pair
+            #set($countAmpersands = $rawAPIData.length() - $rawAPIData.replace("&", "").length())
+            
+            ## if there are no "&" at all then we have only one key value pair.
+            ## we append an ampersand to the string so that we can tokenise it the same way as multiple kv pairs.
+            ## the "empty" kv pair to the right of the ampersand will be ignored anyway.
+            #if ($countAmpersands == 0)
+             #set($rawPostData = $rawAPIData + "&")
+            #end
+            
+            ## now we tokenise using the ampersand(s)
+            #set($tokenisedAmpersand = $rawAPIData.split("&"))
+            
+            ## we set up a variable to hold the valid key value pairs
+            #set($tokenisedEquals = [])
+            
+            ## now we set up a loop to find the valid key value pairs, which must contain only one "="
+            #foreach( $kvPair in $tokenisedAmpersand )
+             #set($countEquals = $kvPair.length() - $kvPair.replace("=", "").length())
+             #if ($countEquals == 1)
+              #set($kvTokenised = $kvPair.split("="))
+               #if ( ($kvTokenised.size() == 2) && ($kvTokenised[0].length() > 0) )
+               ## we found a valid key value pair. add it to the list.
+               #set($devNull = $tokenisedEquals.add($kvPair))
+               #end
+             #end
+            #end
+            
+            ## next we set up our loop inside the output structure "{" and "}"
+            {
+            #foreach( $kvPair in $tokenisedEquals )
+             ## finally we output the JSON for this pair and append a comma if this isn't the last pair
+             #set($kvTokenised = $kvPair.split("="))
+            "$util.urlDecode($kvTokenised[0])" : #if($kvTokenised.size() > 1 && $kvTokenised[1].length() > 0)"$util.urlDecode($kvTokenised[1])"#{else}""#end#if( $foreach.hasNext ),#end
+             #end
+            }
+      ResourceId: !Ref NotifyWorkspaceResource
+      RestApiId: !Ref NotifyWorkspaceApi
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: 'Empty'
+
+  NotifyWorkspaceOptionMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      RestApiId: !Ref NotifyWorkspaceApi
+      ResourceId: !Ref NotifyWorkspaceResource
+      HttpMethod: "OPTIONS"
+      Integration:
+        IntegrationResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'"
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+          ResponseTemplates:
+            application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        Type: MOCK
+      MethodResponses:
+      - StatusCode: 200
+        ResponseModels:
+          application/json: 'Empty'
+        ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+
+Outputs:
+  GraphQLEndpoint:
+    Description: "Url for the Slash Command"
+    Value:
+      Fn::Join: ["", ["https://", "Ref": "NotifyWorkspaceApi", ".execute-api.", "Fn::Sub": "${Region}", ".amazonaws.com/", "Fn::Sub": "${StageName}", "/", "Fn::Sub": "${CommandName}"]]
