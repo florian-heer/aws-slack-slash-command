@@ -17,3 +17,5 @@ make deploy
 make delete
 ```
 Hint: "make delete" will not delete the S3 Bucket you created with "make bucket"
+## Slack integration
+Copy the URL from Output of the created Cloudformation Stack into the slack slash configuration field for the URL.
