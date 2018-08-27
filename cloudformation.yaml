@@ -20,6 +20,10 @@ Parameters:
     Default: "prod"
   CommandName:
     Type: String
+  Language:
+    Type: String
+  Handler:
+    Type: String
 
 Resources:
   NotifyWorkspaceLambdaRole:
@@ -60,14 +64,14 @@ Resources:
       Code:
         S3Bucket: !Sub "${StackRoot}"
         S3Key: !Sub "source_code/${Module}.zip"
-      Description: ""
+      Description: "Process Event Data from Slack"
       Environment:
         Variables:
           SLACK_VERIFICATION_TOKEN: !Sub "${SlackVerificationToken}"
           SLACK_TEAM_ID: !Sub "${SlackTeamId}"
-      Runtime: "nodejs8.10"
+      Runtime: !Sub "${Language}"
       FunctionName: !Sub "${StackRoot}"
-      Handler: "index.handler"
+      Handler: !Sub "${Handler}"
       Role: !GetAtt NotifyWorkspaceLambdaRole.Arn
   
   NotifyWorkspaceApiRole:
