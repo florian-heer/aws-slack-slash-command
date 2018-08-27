@@ -6,6 +6,8 @@ Make sure you have installed make.
 make --version
 ```
 If you are on Windows check this out https://chocolatey.org/packages/make
+## Configuration
+Copy config_example.mk and rename it to config.mk and fill out every field
 ## Deploy your Stack to the AWS Cloud
 ```
 make bucket

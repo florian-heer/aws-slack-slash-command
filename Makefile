@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 include config.mk
 MODULE = $(notdir $(shell pwd))
+STACK_ROOT = slack-$(ACCOUNT)-$(PROJECTNAME)
 
 .PHONY: build bucket deploy delete errors
 
